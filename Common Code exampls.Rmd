@@ -1,0 +1,527 @@
+---
+title: "Exam Preperation"
+output:
+  word_document: default
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+rm(list = ls())
+```
+
+This document will aim to Implement all the key processes identified throught the chapters labs and tutorial questions and solutions as defined in the book but applied onto the 2018 test sets and questions. we dont know exactly what these questions are but we do have an idea of the general topics examined so we can dig into these on these spesific datasets for practices and to get all the equations down pat.
+
+
+#Section A
+
+The data for this question concerns the accident rate and a number of variables relating to highway infrastructure for 39 sections of highways in the state of Minesota, 1973. The aim of the study was to inform the design of safer highway infrastructure. The data are adapted from the `alr3' R-package to re􏰅ect useful transformations of the variables of interest and is provided in the `Question_1_Data.txt` 􏰄le
+
+This question is mainly examined with linear regression analysis with all di􏰃erent types of variables selection methods.
+
+```{r}
+#Read data in
+RoadData <- read.csv("Question_1_Data.txt", sep = " ")
+
+library(psych)
+pairs.panels(RoadData)
+pairs(RoadData)
+
+sapply(RoadData,class)
+```
+Split data up and do basic linear model
+```{r}
+train <- sample(seq_len(nrow(RoadData)), size = ceiling(dim(RoadData)[1]*0.8))
+Roads.train <- RoadData[train, ]
+Roads.test <- RoadData[-train, ]
+
+#fit the linear model to the set and plot the output
+#interactions: *. exponents (higher order) I(var)^2
+lm.fit <- lm(lgRate ~ ., data = RoadData, subset = train)
+par(mfrow = c(2, 2))
+plot(lm.fit)
+summary(lm.fit)
+
+#use the linear model to predict the output and compare this to the test set
+pred.lm <- predict(lm.fit, Roads.test)
+MSE <- mean((pred.lm - Roads.test$lgRate)^2)
+sprintf("Test MSE for basic linear model: %s", MSE)
+```
+
+Variable selection methods
+
+Could also include: `scope = list(upper=medv~.^3,lower = medv ~ 1)`
+```{r}
+#we can look at including all posible interaction terms within the linear model and then identifying the one with the lowest error
+lm.fit.stepped <- step(lm.fit, direction= "both", steps = 1000, trace=FALSE)
+summary(lm.fit.stepped)
+
+#use this output and compare to the test set
+pred.lm <- predict(lm.fit.stepped, Roads.test)
+MSE <- mean((pred.lm - Roads.test$lgRate)^2)
+sprintf("Test MSE for stepped linear model: %s", MSE)
+par(mfrow = c(2, 2))
+plot(lm.fit.stepped)
+```
+Stepped AIC
+```{r}
+library(MASS)
+step <- stepAIC(lm.fit,trace=FALSE, direction= "both")
+summary(step)
+step$anova
+pred.lm <- predict(step, Roads.test)
+MSE <- mean((pred.lm - Roads.test$lgRate)^2)
+sprintf("Test MSE for stepped linear model: %s", MSE)
+```
+
+Lasso
+```{r}
+library(glmnet)
+#create a matrix & vector to store the input parameters
+x <- model.matrix(lgRate ~ . , RoadData)[, -1]
+x <- scale(x)
+y <- RoadData$lgRate
+
+#store all lambda values to test against
+grid <- 10^seq(10, -5, length = 1000)
+
+#run the lasso. alpha = 1 for lasso, alpha = 0 for ridge.
+lasso.mod <- glmnet(x[train, ], y[train], alpha = 1, lambda = grid, standardize=FALSE)
+plot(lasso.mod)
+
+#preform the cross validation
+set.seed(42)
+cv.out <- cv.glmnet(x[train, ], y[train], alpha = 1)
+plot(cv.out)
+
+#we can now select the lowest lambda and use this to predict the output
+bestlambda <- cv.out$lambda.min
+
+#cross validated error
+sprintf("Train cross validation error MSE for ideal Lasso model: %s", min(cv.out$cvm))
+
+#training error 
+lasso.pred <- predict(lasso.mod, s = bestlambda, newx = x[train, ])
+MSE <- mean((lasso.pred - y[train])^2)
+sprintf("Train MSE for ideal Lasso model: %s", MSE)
+
+lasso.pred <- predict(lasso.mod, s = bestlambda, newx = x[-train, ])
+MSE <- mean((lasso.pred - y[-train])^2)
+sprintf("Test MSE for ideal Lasso model: %s", MSE)
+
+```
+ Next we'll do some more generic variable selection and other processes to show other relevent techniques. `regsubsets()` function to perform best subset selection in order to choose the best model containing the predictors . What is the best model obtained according to $C_p$, BIC & adjusted $R^2$.
+
+```{r}
+set.seed(1)
+x <- rnorm(100)
+eps <- rnorm(100)
+
+b0 <- 2
+b1 <- 3
+b2 <- -1
+b3 <- 0.5
+y <- b0 + b1 * x + b2 * x^2 + b3 * x^3 + eps
+
+library(leaps)
+data.full <- data.frame(y = y, x = x)
+regfit.full <- regsubsets(y ~ x + I(x^2) + I(x^3) + I(x^4) + I(x^5) + I(x^6) + I(x^7) + I(x^8) + I(x^9) + I(x^10), data = data.full, nvmax = 10, method = "exhaustive")
+reg.summary <- summary(regfit.full)
+par(mfrow = c(2, 2))
+plot(reg.summary$cp, xlab = "Number of variables", ylab = "C_p", pch = 19, type = "b")
+points(which.min(reg.summary$cp), reg.summary$cp[which.min(reg.summary$cp)], col = "red", cex = 2, pch = 20)
+plot(reg.summary$bic, xlab = "Number of variables", ylab = "BIC", type = "l")
+points(which.min(reg.summary$bic), reg.summary$bic[which.min(reg.summary$bic)], col = "red", cex = 2, pch = 20)
+plot(reg.summary$adjr2, xlab = "Number of variables", ylab = "Adjusted R^2", type = "l")
+points(which.max(reg.summary$adjr2), reg.summary$adjr2[which.max(reg.summary$adjr2)], col = "re d", cex = 2, pch = 20)
+
+coef(regfit.full, which.max(reg.summary$adjr2))
+```
+ 
+```{r}
+xmat <- model.matrix(y ~ x + I(x^2) + I(x^3) + I(x^4) + I(x^5) + I(x^6) + I(x^7) + I(x^8) + I(x
+^9) + I(x^10), data = data.full)[, -1]
+cv.lasso <- cv.glmnet(xmat, y, alpha = 1)
+plot(cv.lasso)
+
+bestlam <- cv.lasso$lambda.min
+bestlam
+
+fit.lasso <- glmnet(xmat, y, alpha = 1)
+predict(fit.lasso, s = bestlam, type = "coefficients")[1:11, ]
+```
+ 
+# Question 2
+A short term insurer's research and development department has developed a metric for use in detecting fraudulent claims. The metric consists of two scores, $α$ and $β$ calculated based on metadata from an internal claims logging system. Combining this with data from the internal claims investigation team, where the claims in question were evaluated and labelled according to whether or not they were in fact fraudulent, we assemble a dataset of ($α$,$β$)-scores and class labels for each pair of scores where
+Class = 1 corresponds to valid claim and Class = 2 to a fraudulent claim. Read the data in from `Question_2_Data.txt` and answer the questions that follow.
+
+This question is mainly examined with logistic linear regression analysis and discriminant analysis with all different types of variables selection methods.
+
+```{r}
+full.data = read.table('Question_2_Data.txt', h = TRUE)
+attach(full.data)
+head(full.data, 7)
+
+full.data[,1] = as.factor(full.data[,1])
+
+train <- sample(seq_len(nrow(full.data)), size = ceiling(dim(full.data)[1]*0.8)) #~80% of the set
+Insurance.train <- full.data[train, ]
+Insurance.test <- full.data[-train, ]
+```
+Basic logistic regression model first
+```{r}
+library(caret)
+glm.fit <- glm(Class ~ ., data = Insurance.train, family = binomial())
+
+probs <- predict(glm.fit, newdata = Insurance.test, type = "response")
+glm.pred <- rep(1, length(probs))
+glm.pred[probs > 0.5] <- 2
+confusionMatrix(factor(glm.pred), Insurance.test$Class, mode = "everything")
+table(glm.pred, Insurance.test$Class)
+```
+```{r}
+plot(probs, as.factor(glm.pred), col = (Insurance.test$Class != 1) +9, type="p", xlab="probability", ylab="Responce", yaxt="n")
+grid()
+abline(v=c(0.5), lty=2, lwd=3)
+axis(2, at=1:2, labels=c('Not fraudulent','fraudulent'))
+```
+
+
+
+LDA
+```{r}
+library(MASS)
+lda.fit <- lda(Class ~ ., data = Insurance.train)
+
+lda.pred <- predict(lda.fit, newdata = Insurance.test)
+
+confusionMatrix(lda.pred$class, Insurance.test$Class, mode = "everything")
+```
+
+KNN
+```{r}
+train.X <- as.matrix(Insurance.train[,-1])
+train.Y <- as.matrix(Insurance.train[,1])
+test.X <- as.matrix(Insurance.test[,-1])
+
+library(class)
+pred.knn <- knn(train.X, test.X, train.Y, k = 1)
+confusionMatrix(pred.knn, Insurance.test$Class)
+mean(pred.knn != Insurance.test$Class)
+```
+
+```{r}
+library(klaR)
+greedy.wilks(Class ~. ,Insurance.train, niveau = 0.15)
+```
+
+Selection is exactly the same as done in the regression case. we use the step function for forwards & backwards. use glmnet and cv.glmnet for logistic regression with lasso while adding standardize=TRUE and family = 'binomial'.
+
+```{r}
+glm.cv <- cv.glmnet(train.X, train.Y, nfolds = 10, type.measure = "mse", standardize=TRUE, family = 'binomial')
+plot(glm.cv)
+```
+
+
+```{r}
+library(ROCR)      
+pred_cv <- prediction(lda.pred$x, Insurance.test$Class)
+acc = performance(pred_cv, "acc")
+plot(acc)
+roc = performance(pred_cv, "tpr", "fpr")
+plot(roc)
+auc = performance(pred_cv, measure = "auc")@y.values
+#plot(auc)
+```
+
+SECTION B
+
+QUESTION 3
+
+This data set includes descriptions of hypothetical samples corresponding to 23 species of gilled mushrooms in the Agaricus and Lepiota Family. Each species is identi􏰄ed as de􏰄nitely edible, de􏰄nitely poisonous, or of unknown edibility and therefore not recom- mended. This latter class was combined with the poisonous one. The Guide clearly states that there is no simple rule for determining the edibility of a mushroom; no rule like 􏰀lea􏰅ets three, let it be􏰁 for Poisonous Oak and Ivy. As a Data Science Masters student, utilize the already existed database of the mushrooms to build a decision tree to assist the process of determining whether a mushroom is poisonous or not. The data is provided in the mushrooms.csv 􏰄le. Read the data into R and answer the questions that follow in full.
+
+This question is mainly examined with classi􏰄cation trees, bagging, random forests with all di􏰃erent types of variables selection methods and parameter tunings.
+
+```{r}
+mushrooms <- read.csv("mushrooms.csv")
+
+set.seed(12345)
+mushrooms <- mushrooms[sample(nrow(mushrooms)),]
+mushrooms.train <- mushrooms[1:6500,]
+mushrooms.test <- mushrooms[6501:nrow(mushrooms),]
+```
+```{r}
+library(tree)
+stopcrit <- tree.control(nobs=nrow(mushrooms.train), minsize = 1, mindev = 0)
+treemodel = tree(poison ~ ., data = mushrooms.train, control = stopcrit, split="deviance")
+treemodel
+plot(treemodel)
+text(treemodel, pretty = 0)
+summary(treemodel)
+
+probs <- predict(treemodel, newdata = mushrooms.test)
+tree.pred <- rep('e', dim(probs)[1])
+tree.pred[probs[,2]> 0.5] <- 'p'
+tree.pred <- as.factor(tree.pred)
+
+confusionMatrix(tree.pred, mushrooms.test$poison)
+```
+
+```{r}
+cv.tree = cv.tree(treemodel,FUN=prune.misclass, K = 10)
+plot(cv.tree$size ,cv.tree$dev ,type="b")
+
+best <- which.min(rev(cv.tree$dev))
+
+prunedtree = prune.tree(treemodel, best)
+summary(prunedtree)
+plot(prunedtree)
+text(treemodel, pretty = 0)
+```
+
+```{r}
+# Bagging and Random Forests #### if mtry = number of predictors then we have bagging.
+library(randomForest)
+randomForest = randomForest(poison ~ ., data = mushrooms.train, mtry = 3, ntree = 100, importance = TRUE)
+randomForest = randomForest(poison ~ ., data = mushrooms.train, mtry = sqrt(ncol(mushrooms.train)), ntree = 100, importance = TRUE)
+
+varImpPlot(randomForest, type=2)
+```
+
+```{r}
+# Boosting ####
+library(gbm)
+boosting <- gbm(poison ~ ., data = mushrooms.train, cv.folds = 10, distribution="gaussian")
+
+summary(boosting)
+plot(boosting$cv.error)
+```
+
+```{r}
+library(h2o)
+library(caret)
+library(mlbench)
+library(ggplot2)
+library(reshape2)
+library(DEEPR)
+
+h2o.init()
+rf.spam <- h2o.randomForest(
+    training_frame = as.h2o(mushrooms.train),
+    y = 1,
+    seed = 1
+  )
+
+rf.probs <- h2o.predict(
+  object = rf.spam,
+  newdata = as.h2o(mushrooms.test)
+)
+
+rf.probs <- as.data.frame(rf.probs)
+confusionMatrix(rf.probs$predict, mushrooms.test$poison, mode = "everything")
+```
+
+
+```{r}
+mtries <- floor(seq(floor(sqrt(length(mushrooms.train))/2),
+              floor(sqrt(length(mushrooms.train))*3),
+              length.out = 5)) 
+ntrees = floor(seq(50, 300,length = 5)) #Number of trees
+max_depth = seq(10, 50,length = 5) #Maximum tree depth
+
+hyper_params <- list(mtries = mtries, ntrees = ntrees, max_depth = max_depth)
+
+rf.grid <- h2o.grid(algorithm = "randomForest",
+                      hyper_params = hyper_params,
+                      x = 2:23,
+                      y = 1, 
+                      training_frame = as.h2o(mushrooms.train),
+                      nfolds = 0,
+                      seed = 1)
+
+rf.best <- h2o.getModel(rf.grid@model_ids[[1]])
+
+#Validation results
+rf.probs <- h2o.predict(
+  object = rf.best,
+  newdata = as.h2o(mushrooms.test)
+)
+rf.probs <- as.data.frame(rf.probs)
+confusionMatrix(rf.probs$predict, mushrooms.test$poison, mode = "everything")
+```
+
+Other good examples
+```{r}
+set.seed(1)
+train <- sample(1:nrow(Boston), nrow(Boston) / 2)
+Boston.train <- Boston[train, -14]
+Boston.test <- Boston[-train, -14]
+Y.train <- Boston[train, 14]
+Y.test <- Boston[-train, 14]
+rf.boston1 <- randomForest(Boston.train, y = Y.train, xtest = Boston.test, ytest = Y.test, mtry
+= ncol(Boston) - 1, ntree = 500)
+rf.boston2 <- randomForest(Boston.train, y = Y.train, xtest = Boston.test, ytest = Y.test, mtry
+= (ncol(Boston) - 1) / 2, ntree = 500)
+rf.boston3 <- randomForest(Boston.train, y = Y.train, xtest = Boston.test, ytest = Y.test, mtry
+= sqrt(ncol(Boston) - 1), ntree = 500)
+plot(1:500, rf.boston1$test$mse, col = "green", type = "l", xlab = "Number of Trees", ylab = "T
+est MSE", ylim = c(10, 19))
+lines(1:500, rf.boston2$test$mse, col = "red", type = "l")
+lines(1:500, rf.boston3$test$mse, col = "blue", type = "l")
+legend("topright", c("m = p", "m = p/2", "m = sqrt(p)"), col = c("green", "red", "blue"), cex =
+1, lty = 1)
+```
+
+```{r}
+library(ISLR)
+set.seed(1)
+train <- sample(1:nrow(Carseats), nrow(Carseats) / 2) 
+Carseats.train <- Carseats[train, ]
+Carseats.test <- Carseats[-train, ]
+tree.carseats <- tree(Sales ~ ., data = Carseats.train)
+yhat <- predict(tree.carseats, newdata = Carseats.test)
+mean((yhat - Carseats.test$Sales)^2)
+
+cv.carseats <- cv.tree(tree.carseats)
+plot(cv.carseats$size, cv.carseats$dev, type = "b")
+tree.min <- which.min(cv.carseats$dev)
+points(tree.min, cv.carseats$dev[tree.min], col = "red", cex = 2, pch = 20)
+
+bag.carseats <- randomForest(Sales ~ ., data = Carseats.train, mtry = 10, ntree = 500, importance = TRUE)
+yhat.bag <- predict(bag.carseats, newdata = Carseats.test)
+mean((yhat.bag - Carseats.test$Sales)^2)
+importance(bag.carseats)
+```
+```{r}
+Hitters <- na.omit(Hitters)
+Hitters$Salary <- log(Hitters$Salary)
+
+train <- 1:200
+Hitters.train <- Hitters[train, ]
+Hitters.test <- Hitters[-train, ]
+
+library(gbm)
+set.seed(1)
+pows <- seq(-10, -0.2, by = 0.1)
+lambdas <- 10^pows
+train.err <- rep(NA, length(lambdas))
+for (i in 1:length(lambdas)) {
+    boost.hitters <- gbm(Salary ~ ., data = Hitters.train, distribution = "gaussian", n.trees = 1000, shrinkage = lambdas[i])
+    pred.train <- predict(boost.hitters, Hitters.train, n.trees = 1000)
+    train.err[i] <- mean((pred.train - Hitters.train$Salary)^2)
+}
+plot(lambdas, train.err, type = "b", xlab = "Shrinkage values", ylab = "Training MSE")
+
+set.seed(1)
+test.err <- rep(NA, length(lambdas)) 
+for (i in 1:length(lambdas)) {
+    boost.hitters <- gbm(Salary ~ ., data = Hitters.train, distribution = "gaussian", n.trees = 1000, shrinkage = lambdas[i])
+    yhat <- predict(boost.hitters, Hitters.test, n.trees = 1000)
+    test.err[i] <- mean((yhat - Hitters.test$Salary)^2)
+}
+plot(lambdas, test.err, type = "b", xlab = "Shrinkage values", ylab = "Test MSE")
+```
+```{r}
+library(gbm)
+boost.hitters <- gbm(Salary ~ ., data = Hitters.train, distribution = "gaussian", n.trees = 1000, shrinkage = lambdas[which.min(test.err)])
+summary(boost.hitters)
+```
+
+# QUESTION 4
+For many years, scientists have questioned why so many Pima Indian Women suffer from diabetes in relation to other ethnicities. The diagnostic, binary-valued variable investigated is whether the patient shows signs of diabetes according to World Health Organization criteria (i.e., if the 2 hour post-load plasma glucose was at least 200 mg/dl at any survey examination or if found during routine medical care) or not. The population lives near Phoenix, Arizona, USA and a random sample of 768 females at least 21 years old of Pima Indian heritage was used to classify the females. The data is provided in the pimaDiabetes.csv.
+
+This question is mainly examined with neural networks and support vector machines with all di􏰃erent types of variables selection methods and parameter tunings.
+
+```{r}
+pimaDiabetes <- read.csv("pimaDiabetes.csv")
+set.seed(12345)
+pimaDiabetes = pimaDiabetes[sample(nrow(pimaDiabetes)),]
+pimaDiabetes$testDiabetes = as.factor(pimaDiabetes$testDiabetes)
+class(pimaDiabetes$testDiabetes)
+pimaDiabetes.train <- pimaDiabetes[1:700,]
+pimaDiabetes.test <- pimaDiabetes[701:nrow(pimaDiabetes),]
+```
+lets start with SVMs
+```{r}
+suppressMessages(library(e1071))
+simple.svm <- svm(testDiabetes~.,
+                  data = pimaDiabetes.train,
+                  kernel = "polynomial",
+                  gamma = 1,
+                  cost = 1)
+#simple.svm$index support vectors
+svm.pred <- predict(simple.svm, pimaDiabetes.test)
+confusionMatrix(svm.pred, pimaDiabetes.test$testDiabetes)
+```
+
+```{r}
+tune.out <- tune(svm, testDiabetes~., data = pimaDiabetes.train, kernel = "polynomial",
+                 ranges = list(gamma = c(2^-13,2^-2), cost = c(2^-0,2^13)))
+
+plot(tune.out)
+summary(tune.out)
+best.model <- tune.out$best.model
+yhat_test <- predict(best.model, pimaDiabetes.test)
+confusionMatrix(yhat_test, pimaDiabetes.test$testDiabetes)
+```
+
+lastly...Nerual networks!!!
+```{r}
+h2o.init()
+data.h2oTrain <- as.h2o(pimaDiabetes.train)
+data.h2oTest <- as.h2o(pimaDiabetes.test)
+
+data.dl <- h2o.deeplearning(x=1:8, y=9, training_frame = data.h2oTrain, validation_frame = data.h2oTest, hidden = c(50,50,50), seed = 1, nfolds = 5)
+
+yhat_test <- h2o.predict(data.dl, data.h2oTest)$predict
+yhat_test <- as.factor(as.matrix(yhat_test))
+
+confusionMatrix(yhat_test, pimaDiabetes.test$testDiabetes)
+```
+
+```{r}
+
+data.dl@parameters
+h2o.performance(data.dl, train = TRUE)
+h2o.mse(data.dl, valid = TRUE)
+h2o.mse(data.dl, xval = TRUE) # this is when you have done CV with nfolds
+h2o.varimp(data.dl)
+```
+
+```{r}
+# Grid Search
+activation_opt <- c("Maxout", "Tanh")
+l1_opt <- c(0, 0.01)
+l2_opt <- c(0, 0.01)
+  
+hyper_params <- list(activation = activation_opt, l1 = l1_opt, l2 = l2_opt)
+search_criteria <- list(strategy = "RandomDiscrete", max_runtime_secs = 60)
+  
+splits <- h2o.splitFrame(data.h2oTrain, ratios = 0.8, seed = 1)
+
+model_grid <- h2o.grid(
+  "deeplearning",
+  x=1:8,
+  y=9,
+  grid_id = "dl_grid3",
+  training_frame = splits[[1]],
+  validation_frame = splits[[2]],
+  distribution = "multinomial",
+  hidden = c(50,50,50),
+  hyper_params = hyper_params,
+  search_criteria = search_criteria)
+
+dl_gridperf <- h2o.getGrid(grid_id = "dl_grid3", 
+                             sort_by = "accuracy", 
+                             decreasing = TRUE)
+print(dl_gridperf)
+
+best_dl_model_id <- dl_gridperf@model_ids[[1]]
+model <- h2o.getModel(best_dl_model_id)
+yhat_test <- h2o.predict(model, data.h2oTest)$predict
+yhat_test <- as.factor(as.matrix(yhat_test))
+confusionMatrix(yhat_test, pimaDiabetes.test$testDiabetes)
+```
+
+
+
