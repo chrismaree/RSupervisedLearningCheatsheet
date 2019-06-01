@@ -13,3 +13,5 @@ This repo contains some basic examples of conducting statistical learning in R. 
 11) Neural Networks 
 
 The 2 page summary is a great study guide or cheatsheet for exams.
+
+An online version of the R code which covest all the above topics can be found [here](https://chrismaree.github.io/RSupervisedLearningCheatsheet/CommonCodeExamples.html) 🚀
